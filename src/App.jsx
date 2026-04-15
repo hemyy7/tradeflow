@@ -25,6 +25,12 @@ import {
 } from "lucide-react";
 import { supabase } from "./supabase";
 
+const ALLOWED_BETA_EMAILS = [
+  "myemail@example.com",
+  "tester1@example.com",
+  "tester2@example.com",
+].map((email) => email.toLowerCase());
+
 /* ──────────────────────────────────────────────────────────
    AUTH
 ────────────────────────────────────────────────────────── */
@@ -181,6 +187,62 @@ function AuthScreen() {
                 {isSignupMode ? "Log in" : "View private beta"}
               </button>
             </div>
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function RestrictedAccessScreen({ email }) {
+  const handleSignOut = async () => {
+    await supabase.auth.signOut();
+  };
+
+  return (
+    <div className="relative flex min-h-screen items-center justify-center overflow-hidden bg-[#080600] p-4">
+      <div className="pointer-events-none absolute inset-0">
+        <div className="absolute left-[-20%] top-[-10%] h-[600px] w-[600px] rounded-full bg-[#f59e0b]/8 blur-[160px]" />
+        <div className="absolute right-[-15%] bottom-[-10%] h-[500px] w-[500px] rounded-full bg-[#d97706]/6 blur-[140px]" />
+        <div className="absolute left-[30%] top-[20%] h-[400px] w-[400px] rounded-full bg-[#fbbf24]/5 blur-[120px]" />
+      </div>
+
+      <div className="relative w-full max-w-[460px]">
+        <div className="relative">
+          <div className="absolute -inset-[1px] rounded-[28px] bg-[linear-gradient(135deg,rgba(251,191,36,0.22),rgba(251,191,36,0.05),rgba(255,255,255,0.04))]" />
+          <div className="absolute -inset-8 rounded-[36px] bg-[#f59e0b]/6 blur-3xl" />
+
+          <div className="relative rounded-[28px] border border-white/6 bg-[linear-gradient(135deg,rgba(13,10,2,0.99),rgba(10,8,2,0.98))] p-8 backdrop-blur-3xl">
+            <div className="hud-divider absolute inset-x-0 top-0 rounded-t-[28px]" />
+
+            <div className="text-[11px] font-semibold uppercase tracking-[0.2em] text-amber-300/52">
+              Private Beta
+            </div>
+
+            <div className="mt-4 text-[30px] font-semibold leading-[1.05] tracking-[-0.04em] text-white/94">
+              TradeFlow is currently in private beta.
+            </div>
+
+            <p className="mt-4 text-[15px] leading-relaxed text-white/50">
+              Your account has not been approved yet.
+            </p>
+
+            <p className="mt-2 text-[13px] leading-relaxed text-white/38">
+              If you believe this is a mistake, contact the person who invited you.
+            </p>
+
+            {email ? (
+              <div className="mt-6 rounded-[16px] border border-white/7 bg-white/[0.03] px-4 py-3 text-[12px] font-medium text-white/42">
+                Signed in as <span className="text-amber-100/88">{email}</span>
+              </div>
+            ) : null}
+
+            <button
+              onClick={handleSignOut}
+              className="mt-6 rounded-[14px] border border-amber-400/16 bg-white/[0.03] px-4 py-3 text-[13px] font-semibold text-amber-100/88 transition-all duration-200 hover:border-amber-300/24 hover:bg-white/[0.05]"
+            >
+              Log Out
+            </button>
           </div>
         </div>
       </div>
@@ -412,6 +474,134 @@ const getTradeResultLabel = (trade) => inferResultFromPnl(trade?.pnl);
 const getWinRateFromCounts = (wins, losses) => {
   const decisiveTrades = wins + losses;
   return decisiveTrades ? (wins / decisiveTrades) * 100 : 0;
+};
+
+const ANALYTICS_MIN_TOTAL_TRADES = 3;
+const ANALYTICS_MIN_CATEGORY_TRADES = 2;
+
+const getAnalyticsTrustState = (
+  items,
+  { minTotalTrades = ANALYTICS_MIN_TOTAL_TRADES, minCategoryTrades = ANALYTICS_MIN_CATEGORY_TRADES } = {}
+) => {
+  const normalizedItems = items.filter((item) => safeNumber(item.trades) > 0);
+  const totalTrades = normalizedItems.reduce((sum, item) => sum + safeNumber(item.trades), 0);
+  const reliableItems = normalizedItems.filter((item) => safeNumber(item.trades) >= minCategoryTrades);
+  const profitableReliableItems = reliableItems.filter((item) => safeNumber(item.pnl) > 0);
+  const losingReliableItems = reliableItems.filter((item) => safeNumber(item.pnl) < 0);
+  const hasEnoughData = totalTrades >= minTotalTrades && reliableItems.length > 0;
+  const hasCredibleBest = hasEnoughData && profitableReliableItems.length > 0;
+
+  return {
+    totalTrades,
+    normalizedItems,
+    reliableItems,
+    profitableReliableItems,
+    losingReliableItems,
+    hasEnoughData,
+    hasCredibleBest,
+    status: !normalizedItems.length ? "empty" : !hasEnoughData ? "early" : hasCredibleBest ? "ready" : "no_profitable",
+  };
+};
+
+const getBestPositiveCategory = (items, options = {}) => {
+  const trust = getAnalyticsTrustState(items, options);
+  if (!trust.hasCredibleBest) return null;
+
+  return (
+    [...trust.profitableReliableItems].sort(
+      (a, b) => safeNumber(b.pnl) - safeNumber(a.pnl) || safeNumber(b.trades) - safeNumber(a.trades)
+    )[0] ?? null
+  );
+};
+
+const getHighestWinRatePositiveCategory = (items, options = {}) => {
+  const trust = getAnalyticsTrustState(items, options);
+  if (!trust.hasCredibleBest) return null;
+
+  return (
+    [...trust.profitableReliableItems].sort((a, b) => {
+      if (safeNumber(b.winRate) !== safeNumber(a.winRate)) return safeNumber(b.winRate) - safeNumber(a.winRate);
+      if (safeNumber(b.trades) !== safeNumber(a.trades)) return safeNumber(b.trades) - safeNumber(a.trades);
+      return safeNumber(b.pnl) - safeNumber(a.pnl);
+    })[0] ?? null
+  );
+};
+
+const getAnalyticsInsightCopy = (kind, status) => {
+  const copy = {
+    setup: {
+      empty: {
+        title: "No setup analytics yet.",
+        body: "Add setup categories to trades to unlock setup analytics.",
+      },
+      early: {
+        title: "No clear setup edge yet.",
+        body: "Log more trades to identify which setups are actually profitable.",
+      },
+      no_profitable: {
+        title: "No profitable setups yet.",
+        body: "Keep journaling — this section will highlight what works once enough data is available.",
+      },
+    },
+    trigger: {
+      empty: {
+        title: "No trigger edge yet.",
+        body: "Add entry triggers to trades to unlock trigger analytics.",
+      },
+      early: {
+        title: "No trigger edge yet.",
+        body: "We need more trade data before ranking your entry triggers.",
+      },
+      no_profitable: {
+        title: "No profitable triggers yet.",
+        body: "Keep journaling — this section will highlight what works once enough data is available.",
+      },
+    },
+    model: {
+      empty: {
+        title: "No model analytics yet.",
+        body: "Add setup, trigger, and target to trades to unlock model analytics.",
+      },
+      early: {
+        title: "No clear model edge yet.",
+        body: "Log more fully structured trades before ranking your trade models.",
+      },
+      no_profitable: {
+        title: "No profitable models yet.",
+        body: "Keep journaling — this section will highlight what works once enough data is available.",
+      },
+    },
+    session: {
+      empty: {
+        title: "No session data yet.",
+        body: "Add a few more trades before we analyze your trading windows.",
+      },
+      early: {
+        title: "Session performance is still forming.",
+        body: "Trade a few more sessions before we identify your strongest window.",
+      },
+      no_profitable: {
+        title: "No profitable session edge yet.",
+        body: "Keep logging sessions — we’ll highlight your strongest window once it proves itself.",
+      },
+    },
+    discipline: {
+      empty: {
+        title: "No execution grade data yet.",
+        body: "Grade a few more trades before we compare execution quality.",
+      },
+      early: {
+        title: "Discipline edge is still forming.",
+        body: "We need more graded trades before we compare execution quality with confidence.",
+      },
+      no_profitable: {
+        title: "No clear discipline edge yet.",
+        body: "Keep grading trades — this section will surface stronger execution patterns once they’re proven.",
+      },
+    },
+  };
+
+  return copy[kind]?.[status] ?? { title: "Not enough data yet.", body: "Log more trades to unlock clearer insights." };
 };
 
 const getWorstNegativePerformer = (items) => {
@@ -3274,20 +3464,34 @@ export default function App() {
       .sort((a, b) => b.pnl - a.pnl);
   }, [trades]);
 
+  const setupAnalyticsTrust = useMemo(() => getAnalyticsTrustState(setupAnalytics), [setupAnalytics]);
+
   const visibleSetupAnalytics = useMemo(
-    () => (showAllSetupAnalytics ? setupAnalytics : setupAnalytics.slice(0, 5)),
-    [setupAnalytics, showAllSetupAnalytics]
+    () =>
+      showAllSetupAnalytics
+        ? setupAnalyticsTrust.reliableItems
+        : setupAnalyticsTrust.reliableItems.slice(0, 5),
+    [setupAnalyticsTrust, showAllSetupAnalytics]
   );
 
   const setupInsight = useMemo(() => {
-    if (setupAnalytics.length === 0) return null;
+    const best = getBestPositiveCategory(setupAnalytics);
+    const worst = setupAnalyticsTrust.hasEnoughData
+      ? getWorstNegativePerformer(setupAnalyticsTrust.reliableItems)
+      : null;
+    const mostUsed = setupAnalyticsTrust.hasEnoughData
+      ? [...setupAnalyticsTrust.reliableItems].sort(
+          (a, b) => b.trades - a.trades || safeNumber(b.pnl) - safeNumber(a.pnl)
+        )[0] ?? null
+      : null;
 
-    const best = setupAnalytics[0] ?? null;
-    const worst = setupAnalytics.find((item) => item.pnl < 0) ?? null;
-    const mostUsed = [...setupAnalytics].sort((a, b) => b.trades - a.trades || b.pnl - a.pnl)[0] ?? null;
-
-    return { best, worst, mostUsed };
-  }, [setupAnalytics]);
+    return {
+      status: setupAnalyticsTrust.status,
+      best,
+      worst,
+      mostUsed,
+    };
+  }, [setupAnalyticsTrust]);
 
   const reviewedSetupAnalytics = useMemo(() => {
     const grouped = trades.reduce((acc, trade) => {
@@ -3325,21 +3529,19 @@ export default function App() {
         return b.trades - a.trades;
       });
 
+    const trust = getAnalyticsTrustState(items);
+
     return {
       items,
-      bestSetup: items.length ? items[0] : null,
-      worstSetup: getWorstNegativePerformer(items),
-      highestWinRate: items.length
-        ? [...items].sort((a, b) => {
-            if (b.winRate !== a.winRate) return b.winRate - a.winRate;
-            return b.trades - a.trades;
-          })[0]
-        : null,
-      mostTraded: items.length
-        ? [...items].sort((a, b) => {
+      trust,
+      bestSetup: getBestPositiveCategory(items),
+      worstSetup: trust.hasEnoughData ? getWorstNegativePerformer(trust.reliableItems) : null,
+      highestWinRate: getHighestWinRatePositiveCategory(items),
+      mostTraded: trust.hasEnoughData
+        ? [...trust.reliableItems].sort((a, b) => {
             if (b.trades !== a.trades) return b.trades - a.trades;
             return safeNumber(b.pnl) - safeNumber(a.pnl);
-          })[0]
+          })[0] ?? null
         : null,
     };
   }, [trades]);
@@ -3388,54 +3590,19 @@ export default function App() {
         return b.trades - a.trades;
       });
 
-    const bestTrigger = items.length ? items[0] : null;
-    const highestWinRate = items.length
-      ? [...items].sort((a, b) => {
-          if (b.winRate !== a.winRate) return b.winRate - a.winRate;
-          return b.trades - a.trades;
-        })[0]
-      : null;
-    const mostTraded = items.length
-      ? [...items].sort((a, b) => {
+    const trust = getAnalyticsTrustState(items);
+    const bestTrigger = getBestPositiveCategory(items);
+    const highestWinRate = getHighestWinRatePositiveCategory(items);
+    const mostTraded = trust.hasEnoughData
+      ? [...trust.reliableItems].sort((a, b) => {
           if (b.trades !== a.trades) return b.trades - a.trades;
           return safeNumber(b.pnl) - safeNumber(a.pnl);
-        })[0]
+        })[0] ?? null
       : null;
-    const worstTrigger = getWorstNegativePerformer(items);
+    const worstTrigger = trust.hasEnoughData ? getWorstNegativePerformer(trust.reliableItems) : null;
 
     const summaryCards = [];
-
-    if (items.length === 1 && bestTrigger) {
-      summaryCards.push(
-        {
-          id: `single:${bestTrigger.trigger}:net`,
-          title: "Best Trigger",
-          label: bestTrigger.trigger,
-          value: formatMoney(bestTrigger.pnl),
-          sub: `${bestTrigger.wins}W • ${bestTrigger.losses}L • ${bestTrigger.breakeven}BE`,
-          meta: `${formatMoney(bestTrigger.avgPnl)} avg per trade`,
-          tone: bestTrigger.pnl >= 0 ? "text-emerald-300 glow-profit" : "text-red-300 glow-loss",
-        },
-        {
-          id: `single:${bestTrigger.trigger}:wr`,
-          title: "Win Rate",
-          label: bestTrigger.trigger,
-          value: formatPercentage(bestTrigger.winRate),
-          sub: `${bestTrigger.wins}W • ${bestTrigger.losses}L • ${bestTrigger.breakeven}BE`,
-          meta: `${formatMoney(bestTrigger.pnl)} net`,
-          tone: "text-[#fcd34d] glow-gold",
-        },
-        {
-          id: `single:${bestTrigger.trigger}:usage`,
-          title: "Most Used",
-          label: bestTrigger.trigger,
-          value: `${bestTrigger.trades}`,
-          sub: `${bestTrigger.trades} ${bestTrigger.trades === 1 ? "trade" : "trades"} logged`,
-          meta: `${formatMoney(bestTrigger.avgPnl)} avg per trade`,
-          tone: "text-white/92",
-        }
-      );
-    } else {
+    if (trust.hasCredibleBest) {
       if (bestTrigger) {
         summaryCards.push({
           id: `best:${bestTrigger.trigger}`,
@@ -3444,7 +3611,7 @@ export default function App() {
           value: formatMoney(bestTrigger.pnl),
           sub: `${bestTrigger.wins}W • ${bestTrigger.losses}L • ${bestTrigger.breakeven}BE`,
           meta: `${formatMoney(bestTrigger.avgPnl)} avg per trade`,
-          tone: bestTrigger.pnl >= 0 ? "text-emerald-300 glow-profit" : "text-red-300 glow-loss",
+          tone: "text-emerald-300 glow-profit",
         });
       }
 
@@ -3487,6 +3654,7 @@ export default function App() {
 
     return {
       items,
+      trust,
       summaryCards,
     };
   }, [trades, customTradeOptions.entryTrigger]);
@@ -3550,53 +3718,18 @@ export default function App() {
         return b.trades - a.trades;
       });
 
-    const bestModel = items.length ? items[0] : null;
-    const highestWinRate = items.length
-      ? [...items].sort((a, b) => {
-          if (b.winRate !== a.winRate) return b.winRate - a.winRate;
-          return b.trades - a.trades;
-        })[0]
-      : null;
-    const mostUsed = items.length
-      ? [...items].sort((a, b) => {
+    const trust = getAnalyticsTrustState(items);
+    const bestModel = getBestPositiveCategory(items);
+    const highestWinRate = getHighestWinRatePositiveCategory(items);
+    const mostUsed = trust.hasEnoughData
+      ? [...trust.reliableItems].sort((a, b) => {
           if (b.trades !== a.trades) return b.trades - a.trades;
           return safeNumber(b.pnl) - safeNumber(a.pnl);
-        })[0]
+        })[0] ?? null
       : null;
-    const worstModel = getWorstNegativePerformer(items);
+    const worstModel = trust.hasEnoughData ? getWorstNegativePerformer(trust.reliableItems) : null;
     const summaryCards = [];
-
-    if (items.length === 1 && bestModel) {
-      summaryCards.push(
-        {
-          id: `single:${bestModel.model}:net`,
-          title: "Best Model",
-          label: bestModel.model,
-          value: formatMoney(bestModel.pnl),
-          sub: `${bestModel.wins}W • ${bestModel.losses}L • ${bestModel.breakeven}BE`,
-          meta: `${formatMoney(bestModel.avgPnl)} avg per trade`,
-          tone: bestModel.pnl >= 0 ? "text-emerald-300 glow-profit" : "text-red-300 glow-loss",
-        },
-        {
-          id: `single:${bestModel.model}:wr`,
-          title: "Win Rate",
-          label: bestModel.model,
-          value: formatPercentage(bestModel.winRate),
-          sub: `${bestModel.wins}W • ${bestModel.losses}L • ${bestModel.breakeven}BE`,
-          meta: `${formatMoney(bestModel.pnl)} net`,
-          tone: "text-[#fcd34d] glow-gold",
-        },
-        {
-          id: `single:${bestModel.model}:usage`,
-          title: "Most Used",
-          label: bestModel.model,
-          value: `${bestModel.trades}`,
-          sub: `${bestModel.trades} ${bestModel.trades === 1 ? "trade" : "trades"} logged`,
-          meta: `${formatMoney(bestModel.avgPnl)} avg per trade`,
-          tone: "text-white/92",
-        }
-      );
-    } else {
+    if (trust.hasCredibleBest) {
       if (bestModel) {
         summaryCards.push({
           id: `best:${bestModel.model}`,
@@ -3605,7 +3738,7 @@ export default function App() {
           value: formatMoney(bestModel.pnl),
           sub: `${bestModel.wins}W • ${bestModel.losses}L • ${bestModel.breakeven}BE`,
           meta: `${formatMoney(bestModel.avgPnl)} avg per trade`,
-          tone: bestModel.pnl >= 0 ? "text-emerald-300 glow-profit" : "text-red-300 glow-loss",
+          tone: "text-emerald-300 glow-profit",
         });
       }
 
@@ -3648,6 +3781,7 @@ export default function App() {
 
     return {
       items,
+      trust,
       summaryCards,
     };
   }, [trades, customTradeOptions.entryTrigger, customTradeOptions.targetPlan]);
@@ -3763,59 +3897,72 @@ export default function App() {
       .sort((a, b) => a.label.localeCompare(b.label));
   }, [trades]);
 
-  const setupEdgeItems = useMemo(() => {
-    const reliable = profitFactorBySetup.filter((item) => item.trades >= 2);
-    return (reliable.length ? reliable : profitFactorBySetup).slice(0, 5);
-  }, [profitFactorBySetup]);
+  const setupEdgeTrust = useMemo(() => getAnalyticsTrustState(profitFactorBySetup), [profitFactorBySetup]);
 
-  const setupEdgeUsesFallback = useMemo(
-    () => profitFactorBySetup.length > 0 && profitFactorBySetup.filter((item) => item.trades >= 2).length === 0,
-    [profitFactorBySetup]
+  const setupEdgeItems = useMemo(
+    () => (setupEdgeTrust.hasCredibleBest ? setupEdgeTrust.reliableItems.slice(0, 5) : []),
+    [setupEdgeTrust]
   );
 
   const sessionEdgeInsight = useMemo(() => {
-    if (!profitFactorBySession.length) return null;
-    const best = profitFactorBySession[0] ?? null;
-    const worst = [...profitFactorBySession].reverse().find((item) => item.pnl < 0) ?? null;
-    return { best, worst };
+    const trust = getAnalyticsTrustState(profitFactorBySession);
+    const best = getBestPositiveCategory(profitFactorBySession);
+    const worst = trust.hasEnoughData ? getWorstNegativePerformer(trust.reliableItems) : null;
+    return { trust, best, worst };
   }, [profitFactorBySession]);
 
   const disciplineComparison = useMemo(() => {
-    const gradesWithTrades = profitFactorByGrade.filter((item) => item.trades > 0);
-    if (!gradesWithTrades.length) return null;
-
-    const rankedByPnl = [...gradesWithTrades].sort((a, b) => safeNumber(b.pnl) - safeNumber(a.pnl));
-    const best = rankedByPnl[0] ?? null;
-    const comparison = rankedByPnl.find((item) => item.label !== best?.label) ?? null;
+    const trust = getAnalyticsTrustState(profitFactorByGrade, { minTotalTrades: 3, minCategoryTrades: 2 });
+    const comparisonPool = trust.reliableItems;
+    const rankedByPnl = [...comparisonPool].sort((a, b) => safeNumber(b.pnl) - safeNumber(a.pnl));
+    const best = trust.hasCredibleBest ? rankedByPnl.find((item) => safeNumber(item.pnl) > 0) ?? null : null;
+    const comparison = best ? rankedByPnl.find((item) => item.label !== best.label) ?? null : null;
 
     return {
+      trust: {
+        ...trust,
+        hasEnoughData: trust.hasEnoughData && comparisonPool.length >= 2,
+        hasCredibleBest: trust.hasCredibleBest && comparisonPool.length >= 2,
+        status:
+          !trust.normalizedItems.length
+            ? "empty"
+            : trust.hasEnoughData && trust.hasCredibleBest && comparisonPool.length >= 2
+            ? "ready"
+            : trust.hasEnoughData && comparisonPool.length >= 2
+            ? "no_profitable"
+            : "early",
+      },
       best,
       comparison,
-      items: gradesWithTrades.slice(0, 4),
+      items: comparisonPool.slice(0, 4),
     };
   }, [profitFactorByGrade]);
 
   const keyInsight = useMemo(() => {
-    if (profitFactorBySetup.length && sessionEdgeInsight?.best) {
-      const topSetup = profitFactorBySetup[0];
+    if (setupEdgeTrust.hasCredibleBest && sessionEdgeInsight?.best && setupEdgeItems[0]) {
+      const topSetup = setupEdgeItems[0];
       if (safeNumber(topSetup.pnl) > 0 && safeNumber(sessionEdgeInsight.best.pnl) > 0) {
         return `Your edge is strongest on ${topSetup.label} setups during ${sessionEdgeInsight.best.label}.`;
       }
     }
 
-    if (disciplineComparison?.best && disciplineComparison?.comparison) {
+    if (disciplineComparison?.trust?.hasCredibleBest && disciplineComparison?.best && disciplineComparison?.comparison) {
       const pnlGap = safeNumber(disciplineComparison.best.pnl) - safeNumber(disciplineComparison.comparison.pnl);
       if (pnlGap > 0) {
         return `Grade ${disciplineComparison.best.label} trades are outperforming Grade ${disciplineComparison.comparison.label} by ${formatMoney(pnlGap)}.`;
       }
     }
 
-    if (setupEdgeItems[0]) {
+    if (setupEdgeTrust.hasCredibleBest && setupEdgeItems[0]) {
       return `${setupEdgeItems[0].label} is currently your strongest tracked setup.`;
     }
 
+    if (setupEdgeTrust.status === "no_profitable") {
+      return "No clear edge yet — keep logging trades and TradeFlow will surface what’s actually working.";
+    }
+
     return "Add a few more structured trades to unlock clearer edge insights.";
-  }, [profitFactorBySetup, sessionEdgeInsight, disciplineComparison, setupEdgeItems]);
+  }, [sessionEdgeInsight, disciplineComparison, setupEdgeItems, setupEdgeTrust]);
 
   const averageConfidence = useMemo(() => {
     if (!journalEntries.length) return 0;
@@ -4049,9 +4196,15 @@ export default function App() {
     { id: "analytics", label: "Analytics", sub: "performance", icon: BarChart3 },
     { id: "journal", label: "Journal", sub: "mindset + review", icon: BookOpen },
   ];
+  const normalizedUserEmail = String(user?.email ?? "").trim().toLowerCase();
+  const isApprovedBetaUser = normalizedUserEmail
+    ? ALLOWED_BETA_EMAILS.includes(normalizedUserEmail)
+    : false;
+  const isFirstTimeDashboard = trades.length === 0;
 
   if (authLoading) return null;
   if (!user) return <AuthScreen />;
+  if (!isApprovedBetaUser) return <RestrictedAccessScreen email={user?.email ?? ""} />;
 
   return (
     <div className="min-h-screen bg-[#080600] text-[#fef3c7]">
@@ -4178,6 +4331,48 @@ export default function App() {
         <main className="relative ml-[72px] min-h-screen p-4 md:p-5">
           <div className="mx-auto max-w-[1280px]">
             {activePage === "dashboard" && (
+              isFirstTimeDashboard ? (
+                <div className="animate-fadeUp">
+                  <div className="relative overflow-hidden rounded-[28px] border border-amber-400/12 bg-[linear-gradient(135deg,rgba(18,13,3,0.99),rgba(10,8,2,0.98))] px-6 py-8 shadow-[0_0_52px_rgba(251,191,36,0.07)] md:px-8 md:py-10">
+                    <div className="pointer-events-none absolute inset-0">
+                      <div className="absolute left-[10%] top-[-12%] h-[260px] w-[260px] rounded-full bg-[#f59e0b]/10 blur-[110px]" />
+                      <div className="absolute right-[12%] top-[8%] h-[220px] w-[220px] rounded-full bg-[#fbbf24]/5 blur-[100px]" />
+                      <div className="absolute inset-0 bg-[radial-gradient(circle_at_top_left,rgba(255,255,255,0.03),transparent_34%)]" />
+                    </div>
+                    <div className="hud-divider absolute inset-x-0 top-0" />
+
+                    <div className="relative flex min-h-[560px] items-center justify-center">
+                      <div className="w-full max-w-[720px] text-center">
+                        <div className="inline-flex items-center gap-2 rounded-full border border-amber-400/14 bg-[#f59e0b]/10 px-3 py-1.5 text-[10px] font-semibold uppercase tracking-[0.22em] text-amber-200/82 shadow-[0_0_16px_rgba(251,191,36,0.08)]">
+                          <Sparkles size={10} />
+                          Private Beta
+                        </div>
+
+                        <h1 className="mt-6 text-[3.2rem] font-bold leading-[0.94] tracking-[-0.06em] text-white glow-soft md:text-[4rem]">
+                          No trades yet.
+                        </h1>
+
+                        <p className="mx-auto mt-5 max-w-[560px] text-[15px] font-medium leading-[1.9] text-white/44">
+                          Start by adding your first trade — this is where your journal, stats, and review flow begin.
+                        </p>
+
+                        <button
+                          onClick={() => setActivePage("trades")}
+                          className="group relative mt-8 inline-flex items-center justify-center gap-2 overflow-hidden rounded-[16px] border border-[#fbbf24]/18 bg-[linear-gradient(135deg,#d97706,#b45309)] px-6 py-4 text-[14px] font-bold text-white shadow-[0_0_28px_rgba(251,191,36,0.28)] transition-all duration-300 hover:scale-[1.02] hover:shadow-[0_0_38px_rgba(251,191,36,0.42)]"
+                        >
+                          <div className="absolute inset-0 bg-[radial-gradient(circle_at_center,rgba(255,255,255,0.18),transparent_55%)] opacity-0 transition-opacity duration-300 group-hover:opacity-100" />
+                          <Plus size={15} className="relative" />
+                          <span className="relative">Add your first trade</span>
+                        </button>
+
+                        <p className="mt-4 text-[13px] leading-relaxed text-white/34">
+                          You can keep it simple at first and add advanced details later.
+                        </p>
+                      </div>
+                    </div>
+                  </div>
+                </div>
+              ) : (
               <div className="animate-fadeUp space-y-5">
                 <div className="relative overflow-hidden rounded-[26px] border border-white/7 bg-[linear-gradient(135deg,rgba(18,13,3,0.99),rgba(10,8,2,0.98))] px-6 py-7 shadow-[0_0_50px_rgba(251,191,36,0.08)] md:px-8">
                   <div className="pointer-events-none absolute inset-0">
@@ -4591,6 +4786,7 @@ export default function App() {
                   </div>
 	                </div>
 	              </div>
+                )
 	            )}
 
             {activePage === "trades" && (
@@ -6529,9 +6725,14 @@ export default function App() {
                       </h2>
 
                       <div className="mt-5 space-y-3">
-                        {setupEdgeItems.length === 0 ? (
+                        {!setupEdgeTrust.hasCredibleBest ? (
                           <div className={`rounded-[16px] border border-white/6 bg-white/[0.02] p-4 text-sm ${textMuted}`}>
-                            No setup data yet.
+                            <div className="text-[15px] font-semibold text-white/84">
+                              {getAnalyticsInsightCopy("setup", setupEdgeTrust.status).title}
+                            </div>
+                            <div className="mt-2 text-[13px] font-medium leading-7 text-white/42">
+                              {getAnalyticsInsightCopy("setup", setupEdgeTrust.status).body}
+                            </div>
                           </div>
                         ) : (
                           setupEdgeItems.map((item) => (
@@ -6568,12 +6769,6 @@ export default function App() {
                             </div>
                           ))
                         )}
-
-                        {setupEdgeUsesFallback ? (
-                          <div className="rounded-[16px] border border-white/6 bg-white/[0.02] px-4 py-3 text-[12px] font-medium text-white/40">
-                            No setup has 2 trades yet, so this view is showing all tracked setups for now.
-                          </div>
-                        ) : null}
                       </div>
                     </div>
                   </PremiumShell>
@@ -6585,9 +6780,14 @@ export default function App() {
                       </h2>
 
                       <div className="mt-5 space-y-3">
-                        {!sessionEdgeInsight?.best ? (
+                        {sessionEdgeInsight?.trust?.status !== "ready" ? (
                           <div className={`rounded-[16px] border border-white/6 bg-white/[0.02] p-4 text-sm ${textMuted}`}>
-                            No session data yet.
+                            <div className="text-[15px] font-semibold text-white/84">
+                              {getAnalyticsInsightCopy("session", sessionEdgeInsight?.trust?.status ?? "empty").title}
+                            </div>
+                            <div className="mt-2 text-[13px] font-medium leading-7 text-white/42">
+                              {getAnalyticsInsightCopy("session", sessionEdgeInsight?.trust?.status ?? "empty").body}
+                            </div>
                           </div>
                         ) : (
                           <>
@@ -6651,9 +6851,14 @@ export default function App() {
                       </h2>
 
                       <div className="mt-5 space-y-3">
-                        {!disciplineComparison?.best ? (
+                        {disciplineComparison?.trust?.status !== "ready" ? (
                           <div className={`rounded-[16px] border border-white/6 bg-white/[0.02] p-4 text-sm ${textMuted}`}>
-                            No execution grade data yet.
+                            <div className="text-[15px] font-semibold text-white/84">
+                              {getAnalyticsInsightCopy("discipline", disciplineComparison?.trust?.status ?? "empty").title}
+                            </div>
+                            <div className="mt-2 text-[13px] font-medium leading-7 text-white/42">
+                              {getAnalyticsInsightCopy("discipline", disciplineComparison?.trust?.status ?? "empty").body}
+                            </div>
                           </div>
                         ) : (
                           <>
@@ -6743,64 +6948,75 @@ export default function App() {
                       </div>
                     ) : (
                       <>
-                        <div className="mt-5 grid gap-4 md:grid-cols-2 xl:grid-cols-4">
-                          {[
-                            {
-                              title: "Best Setup",
-                              label: reviewedSetupAnalytics.bestSetup?.setup || "—",
-                              value: reviewedSetupAnalytics.bestSetup
-                                ? formatMoney(reviewedSetupAnalytics.bestSetup.pnl)
-                                : "—",
-                              sub: reviewedSetupAnalytics.bestSetup
-                                ? `${reviewedSetupAnalytics.bestSetup.wins}W • ${reviewedSetupAnalytics.bestSetup.losses}L • ${reviewedSetupAnalytics.bestSetup.breakeven}BE`
-                                : "No reviewed setups",
-                              tone: reviewedSetupAnalytics.bestSetup?.pnl >= 0 ? "text-emerald-300 glow-profit" : "text-red-300 glow-loss",
-                            },
-                            {
-                              title: "Worst Setup",
-                              label: reviewedSetupAnalytics.worstSetup?.setup || "—",
-                              value: reviewedSetupAnalytics.worstSetup
-                                ? formatMoney(reviewedSetupAnalytics.worstSetup.pnl)
-                                : "—",
-                              sub: reviewedSetupAnalytics.worstSetup
-                                ? `${reviewedSetupAnalytics.worstSetup.wins}W • ${reviewedSetupAnalytics.worstSetup.losses}L • ${reviewedSetupAnalytics.worstSetup.breakeven}BE`
-                                : "No reviewed setups",
-                              tone: reviewedSetupAnalytics.worstSetup?.pnl >= 0 ? "text-emerald-300 glow-profit" : "text-red-300 glow-loss",
-                            },
-                            {
-                              title: "Highest Win Rate",
-                              label: reviewedSetupAnalytics.highestWinRate?.setup || "—",
-                              value: reviewedSetupAnalytics.highestWinRate
-                                ? formatPercentage(reviewedSetupAnalytics.highestWinRate.winRate)
-                                : "—",
-                              sub: reviewedSetupAnalytics.highestWinRate
-                                ? `${reviewedSetupAnalytics.highestWinRate.wins}W • ${reviewedSetupAnalytics.highestWinRate.losses}L • ${reviewedSetupAnalytics.highestWinRate.breakeven}BE`
-                                : "No reviewed setups",
-                              tone: "text-[#fcd34d] glow-gold",
-                            },
-                            {
-                              title: "Most Traded Setup",
-                              label: reviewedSetupAnalytics.mostTraded?.setup || "—",
-                              value: reviewedSetupAnalytics.mostTraded
-                                ? `${reviewedSetupAnalytics.mostTraded.trades}`
-                                : "—",
-                              sub: reviewedSetupAnalytics.mostTraded
-                                ? `${reviewedSetupAnalytics.mostTraded.wins}W • ${reviewedSetupAnalytics.mostTraded.losses}L • ${reviewedSetupAnalytics.mostTraded.breakeven}BE`
-                                : "No reviewed setups",
-                              tone: "text-white/92",
-                            },
-                          ].map((item) => (
-                            <div
-                              key={item.title}
-                              className="rounded-[20px] border border-white/7 bg-[linear-gradient(135deg,rgba(255,255,255,0.035),rgba(255,255,255,0.015))] p-5"
-                            >
-                              <div className={L}>{item.title}</div>
-                              <div className="mt-3 text-[14px] font-semibold text-white/84">{item.label}</div>
-                              <div className={`mt-3 text-[1.45rem] font-bold ${item.tone}`}>{item.value}</div>
-                              <div className="mt-2 text-[11px] font-medium text-white/36">{item.sub}</div>
+                        {reviewedSetupAnalytics.trust.hasCredibleBest ? (
+                          <div className="mt-5 grid gap-4 md:grid-cols-2 xl:grid-cols-4">
+                            {[
+                              {
+                                title: "Best Setup",
+                                label: reviewedSetupAnalytics.bestSetup?.setup || "—",
+                                value: reviewedSetupAnalytics.bestSetup
+                                  ? formatMoney(reviewedSetupAnalytics.bestSetup.pnl)
+                                  : "—",
+                                sub: reviewedSetupAnalytics.bestSetup
+                                  ? `${reviewedSetupAnalytics.bestSetup.wins}W • ${reviewedSetupAnalytics.bestSetup.losses}L • ${reviewedSetupAnalytics.bestSetup.breakeven}BE`
+                                  : "No reviewed setups",
+                                tone: "text-emerald-300 glow-profit",
+                              },
+                              {
+                                title: "Worst Setup",
+                                label: reviewedSetupAnalytics.worstSetup?.setup || "—",
+                                value: reviewedSetupAnalytics.worstSetup
+                                  ? formatMoney(reviewedSetupAnalytics.worstSetup.pnl)
+                                  : "—",
+                                sub: reviewedSetupAnalytics.worstSetup
+                                  ? `${reviewedSetupAnalytics.worstSetup.wins}W • ${reviewedSetupAnalytics.worstSetup.losses}L • ${reviewedSetupAnalytics.worstSetup.breakeven}BE`
+                                  : "No losing setups yet",
+                                tone: "text-red-300 glow-loss",
+                              },
+                              {
+                                title: "Highest Win Rate",
+                                label: reviewedSetupAnalytics.highestWinRate?.setup || "—",
+                                value: reviewedSetupAnalytics.highestWinRate
+                                  ? formatPercentage(reviewedSetupAnalytics.highestWinRate.winRate)
+                                  : "—",
+                                sub: reviewedSetupAnalytics.highestWinRate
+                                  ? `${reviewedSetupAnalytics.highestWinRate.wins}W • ${reviewedSetupAnalytics.highestWinRate.losses}L • ${reviewedSetupAnalytics.highestWinRate.breakeven}BE`
+                                  : "No reviewed setups",
+                                tone: "text-[#fcd34d] glow-gold",
+                              },
+                              {
+                                title: "Most Traded Setup",
+                                label: reviewedSetupAnalytics.mostTraded?.setup || "—",
+                                value: reviewedSetupAnalytics.mostTraded
+                                  ? `${reviewedSetupAnalytics.mostTraded.trades}`
+                                  : "—",
+                                sub: reviewedSetupAnalytics.mostTraded
+                                  ? `${reviewedSetupAnalytics.mostTraded.wins}W • ${reviewedSetupAnalytics.mostTraded.losses}L • ${reviewedSetupAnalytics.mostTraded.breakeven}BE`
+                                  : "No reviewed setups",
+                                tone: "text-white/92",
+                              },
+                            ].map((item) => (
+                              <div
+                                key={item.title}
+                                className="rounded-[20px] border border-white/7 bg-[linear-gradient(135deg,rgba(255,255,255,0.035),rgba(255,255,255,0.015))] p-5"
+                              >
+                                <div className={L}>{item.title}</div>
+                                <div className="mt-3 text-[14px] font-semibold text-white/84">{item.label}</div>
+                                <div className={`mt-3 text-[1.45rem] font-bold ${item.tone}`}>{item.value}</div>
+                                <div className="mt-2 text-[11px] font-medium text-white/36">{item.sub}</div>
+                              </div>
+                            ))}
+                          </div>
+                        ) : (
+                          <div className="mt-5 rounded-[20px] border border-white/7 bg-[linear-gradient(135deg,rgba(255,255,255,0.03),rgba(255,255,255,0.015))] p-6">
+                            <div className="text-[15px] font-semibold text-white/84">
+                              {getAnalyticsInsightCopy("setup", reviewedSetupAnalytics.trust.status).title}
                             </div>
-                          ))}
-                        </div>
+                            <div className="mt-2 text-[13px] font-medium leading-7 text-white/42">
+                              {getAnalyticsInsightCopy("setup", reviewedSetupAnalytics.trust.status).body}
+                            </div>
+                          </div>
+                        )}
 
                         <div className="mt-5 overflow-hidden rounded-[20px] border border-white/7 bg-[linear-gradient(135deg,rgba(255,255,255,0.03),rgba(255,255,255,0.015))]">
                           <div className="grid grid-cols-[1.6fr_0.75fr_0.85fr_1fr_1fr] gap-3 border-b border-white/6 bg-white/[0.03] px-4 py-3 text-[10px] font-semibold uppercase tracking-[0.16em] text-white/34">
@@ -6885,7 +7101,16 @@ export default function App() {
                               </div>
                             ))}
                           </div>
-                        ) : null}
+                        ) : (
+                          <div className="mt-5 rounded-[20px] border border-white/7 bg-[linear-gradient(135deg,rgba(255,255,255,0.03),rgba(255,255,255,0.015))] p-6">
+                            <div className="text-[15px] font-semibold text-white/84">
+                              {getAnalyticsInsightCopy("trigger", entryTriggerAnalytics.trust.status).title}
+                            </div>
+                            <div className="mt-2 text-[13px] font-medium leading-7 text-white/42">
+                              {getAnalyticsInsightCopy("trigger", entryTriggerAnalytics.trust.status).body}
+                            </div>
+                          </div>
+                        )}
 
                         <div className="mt-5 overflow-hidden rounded-[20px] border border-white/7 bg-[linear-gradient(135deg,rgba(255,255,255,0.03),rgba(255,255,255,0.015))]">
                           <div className="grid grid-cols-[1.6fr_0.75fr_0.85fr_1fr_1fr] gap-3 border-b border-white/6 bg-white/[0.03] px-4 py-3 text-[10px] font-semibold uppercase tracking-[0.16em] text-white/34">
@@ -6972,7 +7197,16 @@ export default function App() {
                               </div>
                             ))}
                           </div>
-                        ) : null}
+                        ) : (
+                          <div className="mt-5 rounded-[20px] border border-white/7 bg-[linear-gradient(135deg,rgba(255,255,255,0.03),rgba(255,255,255,0.015))] p-6">
+                            <div className="text-[15px] font-semibold text-white/84">
+                              {getAnalyticsInsightCopy("model", modelPerformanceAnalytics.trust.status).title}
+                            </div>
+                            <div className="mt-2 text-[13px] font-medium leading-7 text-white/42">
+                              {getAnalyticsInsightCopy("model", modelPerformanceAnalytics.trust.status).body}
+                            </div>
+                          </div>
+                        )}
 
                         <div className="mt-5 overflow-hidden rounded-[20px] border border-white/7 bg-[linear-gradient(135deg,rgba(255,255,255,0.03),rgba(255,255,255,0.015))]">
                           <div className="grid grid-cols-[2.1fr_0.7fr_0.85fr_1fr_1fr] gap-3 border-b border-white/6 bg-white/[0.03] px-4 py-3 text-[10px] font-semibold uppercase tracking-[0.16em] text-white/34">
@@ -7020,49 +7254,58 @@ export default function App() {
                         <Target size={16} className="text-white/32" />
                       </div>
 
-                      <div className="mt-5 overflow-hidden rounded-[18px] border border-white/6">
-                        <div className="grid grid-cols-[1.6fr_0.8fr_0.8fr_1fr] gap-3 border-b border-white/6 bg-white/[0.03] px-4 py-3 text-[10px] font-semibold uppercase tracking-[0.16em] text-white/34">
-                          <div>Setup</div>
-                          <div>Trades</div>
-                          <div>WR</div>
-                          <div>P&L</div>
+                      {!setupAnalyticsTrust.hasCredibleBest ? (
+                        <div className="mt-5 rounded-[18px] border border-white/6 bg-white/[0.02] p-5">
+                          <div className="text-[15px] font-semibold text-white/84">
+                            {getAnalyticsInsightCopy("setup", setupAnalyticsTrust.status).title}
+                          </div>
+                          <div className="mt-2 text-[13px] font-medium leading-7 text-white/42">
+                            {getAnalyticsInsightCopy("setup", setupAnalyticsTrust.status).body}
+                          </div>
                         </div>
+                      ) : (
+                        <>
+                          <div className="mt-5 overflow-hidden rounded-[18px] border border-white/6">
+                            <div className="grid grid-cols-[1.6fr_0.8fr_0.8fr_1fr] gap-3 border-b border-white/6 bg-white/[0.03] px-4 py-3 text-[10px] font-semibold uppercase tracking-[0.16em] text-white/34">
+                              <div>Setup</div>
+                              <div>Trades</div>
+                              <div>WR</div>
+                              <div>P&L</div>
+                            </div>
 
-                        <div className="divide-y divide-white/6">
-                          {setupAnalytics.length === 0 ? (
-                            <div className={`p-4 text-sm font-medium ${textMuted}`}>No setup data yet.</div>
-                          ) : (
-                            visibleSetupAnalytics.map((item) => (
-                              <div
-                                key={item.setup}
-                                className="grid grid-cols-[1.6fr_0.8fr_0.8fr_1fr] gap-3 px-4 py-3.5 text-[12px]"
-                              >
-                                <div>
-                                  <div className="font-semibold text-white/84">{item.setup}</div>
-                                  <div className="mt-1 text-[11px] font-medium text-white/34">
-                                    {item.wins}W • {item.losses}L • {item.breakeven}BE
+                            <div className="divide-y divide-white/6">
+                              {visibleSetupAnalytics.map((item) => (
+                                <div
+                                  key={item.setup}
+                                  className="grid grid-cols-[1.6fr_0.8fr_0.8fr_1fr] gap-3 px-4 py-3.5 text-[12px]"
+                                >
+                                  <div>
+                                    <div className="font-semibold text-white/84">{item.setup}</div>
+                                    <div className="mt-1 text-[11px] font-medium text-white/34">
+                                      {item.wins}W • {item.losses}L • {item.breakeven}BE
+                                    </div>
                                   </div>
+                                  <div className="text-white/46">{item.trades}</div>
+                                  <div className="text-white/46">{item.winRate.toFixed(0)}%</div>
+                                  <div className={resultTone(item.pnl)}>{formatMoney(item.pnl)}</div>
                                 </div>
-                                <div className="text-white/46">{item.trades}</div>
-                                <div className="text-white/46">{item.winRate.toFixed(0)}%</div>
-                                <div className={resultTone(item.pnl)}>{formatMoney(item.pnl)}</div>
-                              </div>
-                            ))
-                          )}
-                        </div>
-                      </div>
+                              ))}
+                            </div>
+                          </div>
 
-                      {setupAnalytics.length > 5 ? (
-                        <div className="mt-4 flex justify-end">
-                          <button
-                            type="button"
-                            onClick={() => setShowAllSetupAnalytics((prev) => !prev)}
-                            className="rounded-[12px] border border-white/8 bg-white/[0.03] px-3.5 py-2 text-[12px] font-semibold text-white/66 transition-all hover:border-white/12 hover:text-white/88"
-                          >
-                            {showAllSetupAnalytics ? "Show top 5" : "Show all setups"}
-                          </button>
-                        </div>
-                      ) : null}
+                          {setupAnalyticsTrust.reliableItems.length > 5 ? (
+                            <div className="mt-4 flex justify-end">
+                              <button
+                                type="button"
+                                onClick={() => setShowAllSetupAnalytics((prev) => !prev)}
+                                className="rounded-[12px] border border-white/8 bg-white/[0.03] px-3.5 py-2 text-[12px] font-semibold text-white/66 transition-all hover:border-white/12 hover:text-white/88"
+                              >
+                                {showAllSetupAnalytics ? "Show top 5" : "Show all setups"}
+                              </button>
+                            </div>
+                          ) : null}
+                        </>
+                      )}
                     </div>
                   </PremiumShell>
 
@@ -7073,63 +7316,87 @@ export default function App() {
                       </h2>
                       {setupInsight ? (
                         <>
-                          <p className="mt-4 text-[13px] font-medium leading-7 text-white/42">
-                            A quick read on which setups are carrying your performance right now.
-                          </p>
+                          {setupInsight.status === "ready" ? (
+                            <>
+                              <p className="mt-4 text-[13px] font-medium leading-7 text-white/42">
+                                A quick read on which setups are carrying your performance right now.
+                              </p>
 
-                          <div className="mt-5 grid gap-3">
-                            {setupInsight.best ? (
-                              <div className="rounded-[16px] border border-emerald-400/14 bg-emerald-500/8 p-4">
-                                <div className={L}>Best Setup</div>
-                                <div className="mt-2 text-[16px] font-semibold text-white/88">
-                                  {setupInsight.best.setup}
-                                </div>
-                                <div className="mt-2 text-[1.35rem] font-bold text-emerald-300 glow-profit">
-                                  {formatMoney(setupInsight.best.pnl)}
-                                </div>
-                                <div className="mt-2 text-[12px] font-medium text-white/42">
-                                  Your {setupInsight.best.setup.toLowerCase()} trades are leading setup performance.
-                                </div>
-                              </div>
-                            ) : null}
+                              <div className="mt-5 grid gap-3">
+                                {setupInsight.best ? (
+                                  <div className="rounded-[16px] border border-emerald-400/14 bg-emerald-500/8 p-4">
+                                    <div className={L}>Best Setup</div>
+                                    <div className="mt-2 text-[16px] font-semibold text-white/88">
+                                      {setupInsight.best.setup}
+                                    </div>
+                                    <div className="mt-2 text-[1.35rem] font-bold text-emerald-300 glow-profit">
+                                      {formatMoney(setupInsight.best.pnl)}
+                                    </div>
+                                    <div className="mt-2 text-[12px] font-medium text-white/42">
+                                      Your {setupInsight.best.setup.toLowerCase()} trades are leading setup performance.
+                                    </div>
+                                  </div>
+                                ) : null}
 
-                            {setupInsight.mostUsed ? (
-                              <div className="rounded-[16px] border border-white/6 bg-white/[0.02] p-4">
-                                <div className={L}>Most Used Setup</div>
-                                <div className="mt-2 text-[15px] font-semibold text-white/84">
-                                  {setupInsight.mostUsed.setup}
-                                </div>
-                                <div className="mt-2 text-[12px] font-medium text-white/42">
-                                  {setupInsight.mostUsed.trades} trades • {formatPercentage(setupInsight.mostUsed.winRate)} win rate
-                                </div>
-                              </div>
-                            ) : null}
+                                {setupInsight.mostUsed ? (
+                                  <div className="rounded-[16px] border border-white/6 bg-white/[0.02] p-4">
+                                    <div className={L}>Most Used Setup</div>
+                                    <div className="mt-2 text-[15px] font-semibold text-white/84">
+                                      {setupInsight.mostUsed.setup}
+                                    </div>
+                                    <div className="mt-2 text-[12px] font-medium text-white/42">
+                                      {setupInsight.mostUsed.trades} trades • {formatPercentage(setupInsight.mostUsed.winRate)} win rate
+                                    </div>
+                                  </div>
+                                ) : null}
 
-                            {setupInsight.worst ? (
-                              <div className="rounded-[16px] border border-red-400/14 bg-red-500/8 p-4">
-                                <div className={L}>Weakest Setup</div>
-                                <div className="mt-2 text-[15px] font-semibold text-white/84">
-                                  {setupInsight.worst.setup}
-                                </div>
-                                <div className="mt-2 text-[1.15rem] font-bold text-red-300 glow-loss">
-                                  {formatMoney(setupInsight.worst.pnl)}
-                                </div>
-                                <div className="mt-2 text-[12px] font-medium text-white/42">
-                                  This is the only setup insight card that appears when a setup is actually losing money.
-                                </div>
+                                {setupInsight.worst ? (
+                                  <div className="rounded-[16px] border border-red-400/14 bg-red-500/8 p-4">
+                                    <div className={L}>Weakest Setup</div>
+                                    <div className="mt-2 text-[15px] font-semibold text-white/84">
+                                      {setupInsight.worst.setup}
+                                    </div>
+                                    <div className="mt-2 text-[1.15rem] font-bold text-red-300 glow-loss">
+                                      {formatMoney(setupInsight.worst.pnl)}
+                                    </div>
+                                    <div className="mt-2 text-[12px] font-medium text-white/42">
+                                      This setup is clearly underperforming enough to flag.
+                                    </div>
+                                  </div>
+                                ) : (
+                                  <div className="rounded-[16px] border border-white/6 bg-white/[0.02] p-4">
+                                    <div className={L}>Current Takeaway</div>
+                                    <div className="mt-2 text-[15px] font-semibold text-white/84">
+                                      No losing setup yet
+                                    </div>
+                                    <div className="mt-2 text-[12px] font-medium text-white/42">
+                                      Your reliable setups are holding flat or positive right now, which keeps the setup view clean.
+                                    </div>
+                                  </div>
+                                )}
                               </div>
-                            ) : (
-                              <div className="rounded-[16px] border border-white/6 bg-white/[0.02] p-4">
-                                <div className={L}>Current Takeaway</div>
-                                <div className="mt-2 text-[15px] font-semibold text-white/84">
-                                  No losing setup yet
-                                </div>
-                                <div className="mt-2 text-[12px] font-medium text-white/42">
-                                  Your tracked setups are holding flat or positive right now, which keeps the setup view clean.
-                                </div>
+                            </>
+                          ) : (
+                            <div className="mt-5 rounded-[16px] border border-white/6 bg-white/[0.02] p-4 text-[13px] font-medium text-white/42">
+                              <div className="text-[15px] font-semibold text-white/84">
+                                {getAnalyticsInsightCopy("setup", setupInsight.status).title}
                               </div>
-                            )}
-                          </div>
+                              <div className="mt-2 leading-7">
+                                {getAnalyticsInsightCopy("setup", setupInsight.status).body}
+                              </div>
+                              {setupInsight.status === "no_profitable" && setupInsight.worst ? (
+                                <div className="mt-4 rounded-[14px] border border-red-400/14 bg-red-500/8 p-4">
+                                  <div className={L}>Weakest Setup</div>
+                                  <div className="mt-2 text-[15px] font-semibold text-white/84">
+                                    {setupInsight.worst.setup}
+                                  </div>
+                                  <div className="mt-2 text-[1.1rem] font-bold text-red-300 glow-loss">
+                                    {formatMoney(setupInsight.worst.pnl)}
+                                  </div>
+                                </div>
+                              ) : null}
+                            </div>
+                          )}
                         </>
                       ) : (
                         <div className="mt-5 rounded-[16px] border border-white/6 bg-white/[0.02] p-4 text-[13px] font-medium text-white/42">
