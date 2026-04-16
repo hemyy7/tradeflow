@@ -26,9 +26,8 @@ import {
 import { supabase } from "./supabase";
 
 const ALLOWED_BETA_EMAILS = [
-  "myemail@example.com",
-  "tester1@example.com",
-  "tester2@example.com",
+  "hemishsagar07@gmail.com",
+  "hemyscales02@gmail.com",
 ].map((email) => email.toLowerCase());
 
 /* ──────────────────────────────────────────────────────────
@@ -6952,7 +6951,7 @@ export default function App() {
                           <div className="mt-5 grid gap-4 md:grid-cols-2 xl:grid-cols-4">
                             {[
                               {
-                                title: "Best Setup",
+                                title: "BEST SETUP DISABLED FOR TEST",
                                 label: reviewedSetupAnalytics.bestSetup?.setup || "—",
                                 value: reviewedSetupAnalytics.bestSetup
                                   ? formatMoney(reviewedSetupAnalytics.bestSetup.pnl)
