@@ -25,10 +25,16 @@ import {
 } from "lucide-react";
 import { supabase } from "./supabase";
 
+const normalizeBetaEmail = (email) =>
+  String(email ?? "")
+    .normalize("NFKC")
+    .trim()
+    .toLowerCase();
+
 const ALLOWED_BETA_EMAILS = [
   "hemishsagar07@gmail.com",
   "hemyscales02@gmail.com",
-].map((email) => email.toLowerCase());
+].map(normalizeBetaEmail);
 
 /* ──────────────────────────────────────────────────────────
    AUTH
@@ -478,6 +484,9 @@ const getWinRateFromCounts = (wins, losses) => {
 const ANALYTICS_MIN_TOTAL_TRADES = 3;
 const ANALYTICS_MIN_CATEGORY_TRADES = 2;
 
+const hasProfitableData = (items, minCategoryTrades = ANALYTICS_MIN_CATEGORY_TRADES) =>
+  items.some((item) => safeNumber(item.trades) >= minCategoryTrades && safeNumber(item.pnl) > 0);
+
 const getAnalyticsTrustState = (
   items,
   { minTotalTrades = ANALYTICS_MIN_TOTAL_TRADES, minCategoryTrades = ANALYTICS_MIN_CATEGORY_TRADES } = {}
@@ -488,7 +497,7 @@ const getAnalyticsTrustState = (
   const profitableReliableItems = reliableItems.filter((item) => safeNumber(item.pnl) > 0);
   const losingReliableItems = reliableItems.filter((item) => safeNumber(item.pnl) < 0);
   const hasEnoughData = totalTrades >= minTotalTrades && reliableItems.length > 0;
-  const hasCredibleBest = hasEnoughData && profitableReliableItems.length > 0;
+  const hasCredibleBest = hasEnoughData && hasProfitableData(reliableItems, minCategoryTrades);
 
   return {
     totalTrades,
@@ -3899,8 +3908,8 @@ export default function App() {
   const setupEdgeTrust = useMemo(() => getAnalyticsTrustState(profitFactorBySetup), [profitFactorBySetup]);
 
   const setupEdgeItems = useMemo(
-    () => (setupEdgeTrust.hasCredibleBest ? setupEdgeTrust.reliableItems.slice(0, 5) : []),
-    [setupEdgeTrust]
+    () => (canRenderSetupBestInsights ? setupEdgeTrust.reliableItems.slice(0, 5) : []),
+    [canRenderSetupBestInsights, setupEdgeTrust]
   );
 
   const sessionEdgeInsight = useMemo(() => {
@@ -3909,6 +3918,16 @@ export default function App() {
     const worst = trust.hasEnoughData ? getWorstNegativePerformer(trust.reliableItems) : null;
     return { trust, best, worst };
   }, [profitFactorBySession]);
+
+  const canRenderSetupBestInsights = setupAnalyticsTrust.hasCredibleBest && hasProfitableData(setupAnalyticsTrust.reliableItems);
+  const canRenderReviewedSetupBestInsights =
+    reviewedSetupAnalytics.trust.hasCredibleBest && hasProfitableData(reviewedSetupAnalytics.trust.reliableItems);
+  const canRenderTriggerBestInsights =
+    entryTriggerAnalytics.trust.hasCredibleBest && hasProfitableData(entryTriggerAnalytics.trust.reliableItems);
+  const canRenderModelBestInsights =
+    modelPerformanceAnalytics.trust.hasCredibleBest && hasProfitableData(modelPerformanceAnalytics.trust.reliableItems);
+  const canRenderSessionBestInsights =
+    sessionEdgeInsight?.trust?.hasCredibleBest && hasProfitableData(sessionEdgeInsight?.trust?.reliableItems ?? []);
 
   const disciplineComparison = useMemo(() => {
     const trust = getAnalyticsTrustState(profitFactorByGrade, { minTotalTrades: 3, minCategoryTrades: 2 });
@@ -3938,7 +3957,7 @@ export default function App() {
   }, [profitFactorByGrade]);
 
   const keyInsight = useMemo(() => {
-    if (setupEdgeTrust.hasCredibleBest && sessionEdgeInsight?.best && setupEdgeItems[0]) {
+    if (canRenderSetupBestInsights && canRenderSessionBestInsights && sessionEdgeInsight?.best && setupEdgeItems[0]) {
       const topSetup = setupEdgeItems[0];
       if (safeNumber(topSetup.pnl) > 0 && safeNumber(sessionEdgeInsight.best.pnl) > 0) {
         return `Your edge is strongest on ${topSetup.label} setups during ${sessionEdgeInsight.best.label}.`;
@@ -3952,7 +3971,7 @@ export default function App() {
       }
     }
 
-    if (setupEdgeTrust.hasCredibleBest && setupEdgeItems[0]) {
+    if (canRenderSetupBestInsights && setupEdgeItems[0]) {
       return `${setupEdgeItems[0].label} is currently your strongest tracked setup.`;
     }
 
@@ -3961,7 +3980,7 @@ export default function App() {
     }
 
     return "Add a few more structured trades to unlock clearer edge insights.";
-  }, [sessionEdgeInsight, disciplineComparison, setupEdgeItems, setupEdgeTrust]);
+  }, [canRenderSessionBestInsights, canRenderSetupBestInsights, sessionEdgeInsight, disciplineComparison, setupEdgeItems, setupEdgeTrust]);
 
   const averageConfidence = useMemo(() => {
     if (!journalEntries.length) return 0;
@@ -4195,11 +4214,24 @@ export default function App() {
     { id: "analytics", label: "Analytics", sub: "performance", icon: BarChart3 },
     { id: "journal", label: "Journal", sub: "mindset + review", icon: BookOpen },
   ];
-  const normalizedUserEmail = String(user?.email ?? "").trim().toLowerCase();
+  const normalizedUserEmail = normalizeBetaEmail(user?.email);
   const isApprovedBetaUser = normalizedUserEmail
     ? ALLOWED_BETA_EMAILS.includes(normalizedUserEmail)
     : false;
   const isFirstTimeDashboard = trades.length === 0;
+
+  useEffect(() => {
+    if (authLoading || !user) return;
+
+    console.log("BETA CHECK", {
+      rawEmail: user?.email,
+      normalizedEmail: normalizedUserEmail,
+      allowlisted: ALLOWED_BETA_EMAILS.includes(normalizedUserEmail),
+      allowedBetaEmails: ALLOWED_BETA_EMAILS,
+      secondaryGate: null,
+      isApprovedBetaUser,
+    });
+  }, [authLoading, user, normalizedUserEmail, isApprovedBetaUser]);
 
   if (authLoading) return null;
   if (!user) return <AuthScreen />;
@@ -4270,17 +4302,23 @@ export default function App() {
               }`}
             >
               <div className="flex h-full flex-col px-4 py-4">
-                <div className="relative rounded-[18px] border border-white/6 bg-[linear-gradient(135deg,rgba(255,255,255,0.04),rgba(255,255,255,0.01))] px-4 py-4">
+                <div className="relative overflow-hidden rounded-[18px] border border-white/6 bg-[linear-gradient(135deg,rgba(255,255,255,0.035),rgba(255,255,255,0.01))] px-4 py-4 shadow-[0_0_24px_rgba(251,191,36,0.06)]">
                   <div className="hud-divider absolute inset-x-0 top-0 rounded-t-[18px]" />
-                  <div className="px-4 pt-5 pb-3">
-                    <div className="w-full rounded-xl border border-amber-400/20 bg-[#070707] shadow-[0_0_20px_rgba(251,191,36,0.08)] overflow-hidden">
-                      <div className="flex items-center justify-center px-3 py-3">
-                        <img
-                          src={tradeflowFullLogo}
-                          alt="TradeFlow"
-                          className="block w-full max-w-full h-auto object-contain"
-                        />
-                      </div>
+                  <div className="relative flex items-center gap-3.5">
+                    <div className="flex h-12 w-12 shrink-0 items-center justify-center rounded-[16px] border border-amber-400/24 bg-[linear-gradient(135deg,rgba(12,10,6,0.96),rgba(8,7,4,0.9))] shadow-[0_0_18px_rgba(251,191,36,0.12)] backdrop-blur-2xl">
+                      <img
+                        src={iconLogo}
+                        alt="TradeFlow Icon"
+                        className="h-8 w-8 object-contain"
+                      />
+                    </div>
+
+                    <div className="min-w-0 flex-1">
+                      <img
+                        src={tradeflowFullLogo}
+                        alt="TradeFlow"
+                        className="block h-8 w-full object-contain object-left"
+                      />
                     </div>
                   </div>
                 </div>
@@ -6779,7 +6817,7 @@ export default function App() {
                       </h2>
 
                       <div className="mt-5 space-y-3">
-                        {sessionEdgeInsight?.trust?.status !== "ready" ? (
+                        {!canRenderSessionBestInsights ? (
                           <div className={`rounded-[16px] border border-white/6 bg-white/[0.02] p-4 text-sm ${textMuted}`}>
                             <div className="text-[15px] font-semibold text-white/84">
                               {getAnalyticsInsightCopy("session", sessionEdgeInsight?.trust?.status ?? "empty").title}
@@ -6947,11 +6985,11 @@ export default function App() {
                       </div>
                     ) : (
                       <>
-                        {reviewedSetupAnalytics.trust.hasCredibleBest ? (
+                        {canRenderReviewedSetupBestInsights ? (
                           <div className="mt-5 grid gap-4 md:grid-cols-2 xl:grid-cols-4">
                             {[
                               {
-                                title: "BEST SETUP DISABLED FOR TEST",
+                                title: "Best Setup",
                                 label: reviewedSetupAnalytics.bestSetup?.setup || "—",
                                 value: reviewedSetupAnalytics.bestSetup
                                   ? formatMoney(reviewedSetupAnalytics.bestSetup.pnl)
@@ -7071,7 +7109,7 @@ export default function App() {
                       </div>
                     ) : (
                       <>
-                        {entryTriggerAnalytics.summaryCards.length > 0 ? (
+                        {canRenderTriggerBestInsights && entryTriggerAnalytics.summaryCards.length > 0 ? (
                           <div
                             className={`mt-5 grid gap-4 ${
                               entryTriggerAnalytics.summaryCards.length >= 4
@@ -7165,7 +7203,7 @@ export default function App() {
                       </div>
                     ) : (
                       <>
-                        {modelPerformanceAnalytics.summaryCards.length > 0 ? (
+                        {canRenderModelBestInsights && modelPerformanceAnalytics.summaryCards.length > 0 ? (
                           <div
                             className={`mt-5 grid gap-4 ${
                               modelPerformanceAnalytics.summaryCards.length >= 4
@@ -7253,7 +7291,7 @@ export default function App() {
                         <Target size={16} className="text-white/32" />
                       </div>
 
-                      {!setupAnalyticsTrust.hasCredibleBest ? (
+                      {!canRenderSetupBestInsights ? (
                         <div className="mt-5 rounded-[18px] border border-white/6 bg-white/[0.02] p-5">
                           <div className="text-[15px] font-semibold text-white/84">
                             {getAnalyticsInsightCopy("setup", setupAnalyticsTrust.status).title}
@@ -7315,7 +7353,7 @@ export default function App() {
                       </h2>
                       {setupInsight ? (
                         <>
-                          {setupInsight.status === "ready" ? (
+                          {canRenderSetupBestInsights && setupInsight.status === "ready" ? (
                             <>
                               <p className="mt-4 text-[13px] font-medium leading-7 text-white/42">
                                 A quick read on which setups are carrying your performance right now.
