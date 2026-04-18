@@ -3907,10 +3907,13 @@ export default function App() {
 
   const setupEdgeTrust = useMemo(() => getAnalyticsTrustState(profitFactorBySetup), [profitFactorBySetup]);
 
-  const setupEdgeItems = useMemo(
-    () => (canRenderSetupBestInsights ? setupEdgeTrust.reliableItems.slice(0, 5) : []),
-    [canRenderSetupBestInsights, setupEdgeTrust]
-  );
+  const canRenderSetupBestInsights = setupAnalyticsTrust.hasCredibleBest && hasProfitableData(setupAnalyticsTrust.reliableItems);
+  const canRenderReviewedSetupBestInsights =
+    reviewedSetupAnalytics.trust.hasCredibleBest && hasProfitableData(reviewedSetupAnalytics.trust.reliableItems);
+  const canRenderTriggerBestInsights =
+    entryTriggerAnalytics.trust.hasCredibleBest && hasProfitableData(entryTriggerAnalytics.trust.reliableItems);
+  const canRenderModelBestInsights =
+    modelPerformanceAnalytics.trust.hasCredibleBest && hasProfitableData(modelPerformanceAnalytics.trust.reliableItems);
 
   const sessionEdgeInsight = useMemo(() => {
     const trust = getAnalyticsTrustState(profitFactorBySession);
@@ -3919,15 +3922,13 @@ export default function App() {
     return { trust, best, worst };
   }, [profitFactorBySession]);
 
-  const canRenderSetupBestInsights = setupAnalyticsTrust.hasCredibleBest && hasProfitableData(setupAnalyticsTrust.reliableItems);
-  const canRenderReviewedSetupBestInsights =
-    reviewedSetupAnalytics.trust.hasCredibleBest && hasProfitableData(reviewedSetupAnalytics.trust.reliableItems);
-  const canRenderTriggerBestInsights =
-    entryTriggerAnalytics.trust.hasCredibleBest && hasProfitableData(entryTriggerAnalytics.trust.reliableItems);
-  const canRenderModelBestInsights =
-    modelPerformanceAnalytics.trust.hasCredibleBest && hasProfitableData(modelPerformanceAnalytics.trust.reliableItems);
   const canRenderSessionBestInsights =
     sessionEdgeInsight?.trust?.hasCredibleBest && hasProfitableData(sessionEdgeInsight?.trust?.reliableItems ?? []);
+
+  const setupEdgeItems = useMemo(
+    () => (canRenderSetupBestInsights ? setupEdgeTrust.reliableItems.slice(0, 5) : []),
+    [canRenderSetupBestInsights, setupEdgeTrust]
+  );
 
   const disciplineComparison = useMemo(() => {
     const trust = getAnalyticsTrustState(profitFactorByGrade, { minTotalTrades: 3, minCategoryTrades: 2 });
