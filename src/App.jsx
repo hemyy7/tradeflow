@@ -35,6 +35,7 @@ const ALLOWED_BETA_EMAILS = [
   "hemishsagar07@gmail.com",
   "hemyscales02@gmail.com",
   "great.wave878@gmail.com",
+  "dm2185558@gmail.com",
 ].map(normalizeBetaEmail);
 
 /* ──────────────────────────────────────────────────────────
